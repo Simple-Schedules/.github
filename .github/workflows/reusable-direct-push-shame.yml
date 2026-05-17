@@ -1,0 +1,117 @@
+name: Reusable Direct-Push Shame
+
+# Soft enforcement substitute for branch protection on GitHub Free.
+# When someone pushes directly to main without going through a PR, this
+# workflow posts a noisy commit comment and fires a GitHub mobile push
+# notification, making the bypass visible and uncomfortable.
+#
+# Called by consumer repos via:
+#
+#   on:
+#     push:
+#       branches: [main]
+#   jobs:
+#     shame:
+#       uses: Simple-Schedules/.github/.github/workflows/reusable-direct-push-shame.yml@main
+#
+# When upgrading to GitHub Team and enabling real branch protection, this
+# workflow can stay on as a backup signal (it'll never fire because protection
+# prevents direct pushes), or be removed.
+
+on:
+  workflow_call:
+
+jobs:
+  shame:
+    name: Detect direct-to-main push
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check if this commit came from a PR merge
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          # Find any PR that contains this commit. Squash-merged PRs have
+          # the merge commit's SHA, not the original commit SHAs, so we
+          # query by commit.
+          prs=$(gh api "repos/$REPO/commits/$COMMIT_SHA/pulls" --jq '. | length')
+          echo "prs_found=$prs"
+          echo "actor=$ACTOR"
+          # The first line of a squash-merge commit message looks like
+          # "title (#NN)". If we see that pattern, it's a PR merge.
+          if echo "$MESSAGE" | head -n1 | grep -qE '\(#[0-9]+\)$'; then
+            echo "is_pr_merge=true" >> "$GITHUB_OUTPUT"
+            echo "Detected PR merge in message: pass"
+            exit 0
+          fi
+          if [ "$prs" -gt 0 ]; then
+            echo "is_pr_merge=true" >> "$GITHUB_OUTPUT"
+            echo "Detected associated PR: pass"
+            exit 0
+          fi
+          # Dependabot auto-merges are also fine, even when they show up as
+          # direct push events.
+          if [ "$ACTOR" = "dependabot[bot]" ]; then
+            echo "is_pr_merge=true" >> "$GITHUB_OUTPUT"
+            echo "Dependabot push: pass"
+            exit 0
+          fi
+          echo "is_pr_merge=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Direct-to-main push detected (no associated PR)."
+
+      - name: Post shame comment on commit
+        if: steps.check.outputs.is_pr_merge != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          body=$(cat <<EOF
+          ⚠️ **Direct-to-\`main\` push detected** by @$ACTOR — bypassed the PR review pipeline.
+
+          From [/PIPELINE.md](/$REPO/blob/main/PIPELINE.md): every change should branch from \`main\`, open a PR, get Gemini Flash advisory + optional \`/pr-review\` + optional \`/ultrareview\`, then merge.
+
+          This commit was pushed straight to main without any of that. Was it a hotfix? File an issue ([new issue](/$REPO/issues/new)) explaining why, and going forward please use a PR even for hotfixes.
+
+          _Soft enforcement only — nothing physically blocked this. When we upgrade to GitHub Team (~$4/mo), branch protection will._
+          EOF
+          )
+          gh api "repos/$REPO/commits/$COMMIT_SHA/comments" -X POST -f body="$body" > /dev/null
+          echo "Posted shame comment on $COMMIT_SHA"
+
+      - name: Append to direct-push log issue
+        if: steps.check.outputs.is_pr_merge != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          # Find an open issue titled exactly "Direct-push log" (one per repo).
+          # If it doesn't exist, create it. Then append a row.
+          title="Direct-push log"
+          existing=$(gh issue list --repo "$REPO" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            existing=$(gh issue create --repo "$REPO" --title "$title" --label "type:infra" \
+              --body "Running log of direct-to-main pushes that bypassed the PR pipeline. Each entry: SHA, actor, date, message first line. Reviewed periodically to decide whether to upgrade to GitHub Team for real branch protection." \
+              --json number --jq '.number')
+            echo "Created log issue #$existing"
+          fi
+          first_line=$(echo "$MESSAGE" | head -n1)
+          date_now=$(date -u +"%Y-%m-%d %H:%M UTC")
+          entry="- $date_now — \`$COMMIT_SHA\` — @$ACTOR — \"$first_line\""
+          gh issue comment "$existing" --repo "$REPO" --body "$entry"
+          echo "Appended log entry to issue #$existing"

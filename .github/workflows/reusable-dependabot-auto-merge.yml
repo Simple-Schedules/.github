@@ -1,0 +1,60 @@
+name: Reusable Dependabot Auto-Merge
+
+# Auto-merge Dependabot minor/patch PRs once all checks pass. Closes the
+# "dependabot pile-up" problem without paying for branch protection: even
+# without ai-approved label enforcement, this workflow handles the bot's PRs
+# so they don't sit open indefinitely.
+#
+# Called by consumer repos via:
+#
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#   jobs:
+#     auto-merge:
+#       if: github.actor == 'dependabot[bot]'
+#       uses: Simple-Schedules/.github/.github/workflows/reusable-dependabot-auto-merge.yml@main
+#
+# Requires repo setting: Settings → General → Pull Requests → "Allow auto-merge".
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Dependabot auto-merge (minor/patch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot PR metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply ai-approved label (soft-enforcement bypass for bots)
+        if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr edit "$PR_URL" --add-label ai-approved
+
+      - name: Enable auto-merge for minor/patch
+        if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash --delete-branch "$PR_URL"
+
+      - name: Comment on major version bumps (don't auto-merge)
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr comment "$PR_URL" --body "🚦 Major version bump (${{ steps.meta.outputs.dependency-names }} → ${{ steps.meta.outputs.new-version }}) — not auto-merged. Major versions often require migration work. Review manually and merge if safe, or close if not yet."

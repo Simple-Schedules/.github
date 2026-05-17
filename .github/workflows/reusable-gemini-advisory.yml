@@ -1,0 +1,47 @@
+name: Reusable Gemini Advisory
+
+# Tier 1 PR review using Gemini 2.0 Flash (free tier). Called by consumer
+# repos via:
+#
+#   jobs:
+#     review:
+#       uses: Simple-Schedules/.github/.github/workflows/reusable-gemini-advisory.yml@main
+#       secrets:
+#         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+#
+# The consumer's caller workflow must trigger on `pull_request: [opened, synchronize, reopened]`.
+
+on:
+  workflow_call:
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+
+jobs:
+  review:
+    name: Gemini Flash advisory
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout org-shared scripts
+        uses: actions/checkout@v4
+        with:
+          repository: Simple-Schedules/.github
+          path: .org-shared
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Gemini advisory review
+        run: node .org-shared/scripts/gemini-review.mjs
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
