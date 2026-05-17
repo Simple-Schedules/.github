@@ -1,0 +1,47 @@
+name: Reusable Require AI Approved
+
+# Soft-enforcement merge gate. Fails the check if the PR is missing the
+# `ai-approved` label. The label is applied by the human reviewer after
+# they've at least read the Gemini Flash advisory comment (Tier 1) and
+# optionally run /pr-review locally (Tier 2) or /ultrareview (Tier 3).
+#
+# Called by consumer repos via:
+#
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, labeled, unlabeled]
+#   jobs:
+#     check:
+#       uses: Simple-Schedules/.github/.github/workflows/reusable-require-ai-approved.yml@main
+#       permissions:
+#         contents: read
+#
+# Currently advisory on GitHub Free (no server-side enforcement). Becomes a
+# real merge block once we upgrade to GitHub Team and apply branch protection.
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    name: ai-approved label check
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Verify ai-approved label is present
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          if echo "$LABELS" | grep -q '"ai-approved"'; then
+            echo "✓ ai-approved label is present. Pipeline gate passed."
+            exit 0
+          else
+            echo "::error::ai-approved label is missing."
+            echo ""
+            echo "How to unblock:"
+            echo "  1. Read the Gemini Flash advisory comment on this PR"
+            echo "  2. If labeled \`needs-deep-review\`, run /pr-review locally"
+            echo "  3. For solver/auth/payments PRs, also run /ultrareview"
+            echo "  4. Apply the \`ai-approved\` label to unblock this check"
+            exit 1
+          fi
