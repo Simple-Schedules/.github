@@ -20,6 +20,13 @@
 const STICKY_MARKER = "<!-- gemini-advisory -->";
 const MAX_DIFF_CHARS = 30_000;
 const RETRY_DELAYS_MS = [1000, 4000, 16_000]; // 3 attempts before giving up.
+
+// Model can be overridden via GEMINI_MODEL env. Default to gemini-1.5-flash
+// because gemini-2.0-flash free-tier is restricted in some regions (notably
+// EU/EEA accounts hit "limit: 0" even with the API enabled). 1.5-flash has
+// broader global free-tier availability and is plenty capable for Tier 1
+// triage.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 const RISKY_PATH_PATTERNS = [
   /^src\/solver\//,
   /^src\/stores\/useWizardStore\./,
@@ -106,7 +113,7 @@ function truncateDiff(diff) {
 }
 
 async function callGemini(diff, prMeta, riskyPaths) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
   const systemInstruction = `You are a Tier 1 PR reviewer for a Next.js webapp called Simple Schedules. Your job is a fast first-pass review, not deep architectural critique. Be honest and terse.
 
 Flag a PR as needs_deep_review=true if ANY of:
